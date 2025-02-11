@@ -1,0 +1,12 @@
+Flask==3.0.3
+Flask-Cors==3.0.10
+Flask-Session==0.4.0
+openai==1.35.7
+python-dotenv==1.0.1
+pymongo==4.8.0
+gunicorn==22.0.0
+tiktoken
+geoip2
+pandas==1.5.3
+scikit-learn==1.2.2
+joblib==1.2.0
