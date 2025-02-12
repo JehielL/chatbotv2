@@ -21,3 +21,5 @@ class Config:
     OPEN_API_MODEL = os.getenv('OPEN_API_MODEL', 'gpt-3.5-turbo')
 
     CONTEXTS_DIR = os.getenv('CONTEXTS_DIR', 'context')
+
+    PIPEDRIVE_API_TOKEN = os.getenv('PIPEDRIVE_API_TOKEN')
