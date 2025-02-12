@@ -51,6 +51,7 @@ def chat():
             current_app.logger.warning("Solicitud con datos incompletos.")
             return jsonify({"error": "Datos incompletos"}), 400
         
+        # Aseguramos que la sesión tenga un user_id
         ensure_user_id(session)
         user_id = session['user_id']
         current_app.logger.info(f"Procesando mensaje para user_id: {user_id}")
@@ -59,8 +60,10 @@ def chat():
         interactions_collection = current_app.db.interactions
         interactions_collection.update_one(
             {"user_id": user_id},
-            {'$inc': {'count': 1},
-             '$push': {'messages': {'user_message': user_message, 'timestamp': datetime.now()}}},
+            {
+                '$inc': {'count': 1},
+                '$push': {'messages': {'user_message': user_message, 'timestamp': datetime.now()}}
+            },
             upsert=True
         )
         current_app.logger.info("Interacciones actualizadas en MongoDB.")
@@ -104,38 +107,53 @@ def chat():
         current_app.db.chats.insert_one(chat_entry)
         current_app.logger.info("Chat guardado en MongoDB.")
         
-        # Integración con Pipedrive: Siempre crear un nuevo deal
+        # Integración con Pipedrive: Crear nuevo deal SOLO si el usuario aún no tiene uno
         try:
             usuario = current_app.db.usuarios.find_one({"user_id": user_id}, {"_id": 0})
             current_app.logger.info(f"Datos del usuario para Pipedrive: {usuario}")
             if usuario:
-                from myapp.services.pipedrive_service import create_person, create_deal
-                # Preparar datos para crear la persona
-                person_data = {
-                    "name": usuario.get("nombre") or usuario.get("nombreCliente"),
-                    "email": usuario.get("email") or usuario.get("correoElectronico"),
-                    "phone": usuario.get("telefono")
-                }
-                current_app.logger.info(f"Creando persona en Pipedrive con datos: {person_data}")
-                person_response = create_person(person_data)
-                person_id = person_response.get("data", {}).get("id")
-                if person_id:
-                    # Usar el campo "motivovisita" para el título del nuevo deal
-                    motivovisita = usuario.get("motivo_visita") or usuario.get("motivovisita")
-                    deal_data = {
-                        "title": motivovisita if motivovisita else "Nuevo Deal",
-                        "pipeline_id": 6,  # Asumiendo que el pipeline es fijo (por ejemplo, el ID 6)
-                        "person_id": person_id
-                    }
-                    deal_response = create_deal(deal_data)
-                    current_app.logger.info(f"Nuevo deal creado en Pipedrive: {deal_response}")
+                if usuario.get("deal_id"):
+                    # Si el usuario ya tiene un deal, se omite la creación de uno nuevo
+                    current_app.logger.info(
+                        f"El usuario ya tiene un deal creado (deal_id: {usuario.get('deal_id')}). No se crea uno nuevo."
+                    )
                 else:
-                    current_app.logger.error("No se pudo crear la persona en Pipedrive.")
+                    from myapp.services.pipedrive_service import create_person, create_deal
+                    # Preparar datos para crear la persona en Pipedrive
+                    person_data = {
+                        "name": usuario.get("nombre") or usuario.get("nombreCliente"),
+                        "email": usuario.get("email") or usuario.get("correoElectronico"),
+                        "phone": usuario.get("telefono")
+                    }
+                    current_app.logger.info(f"Creando persona en Pipedrive con datos: {person_data}")
+                    person_response = create_person(person_data)
+                    person_id = person_response.get("data", {}).get("id")
+                    if person_id:
+                        # Usar el campo "motivovisita" para el título del nuevo deal
+                        motivovisita = usuario.get("motivo_visita") or usuario.get("motivovisita")
+                        deal_data = {
+                            "title": motivovisita if motivovisita else "Nuevo Deal",
+                            "pipeline_id": 6,  # ID del pipeline fijo en Pipedrive
+                            "person_id": person_id
+                        }
+                        deal_response = create_deal(deal_data)
+                        new_deal_id = deal_response.get("data", {}).get("id")
+                        if new_deal_id:
+                            current_app.logger.info(f"Nuevo deal creado en Pipedrive: {deal_response}")
+                            # Guardar el deal_id en el registro del usuario en MongoDB
+                            current_app.db.usuarios.update_one(
+                                {"user_id": user_id},
+                                {"$set": {"deal_id": new_deal_id}}
+                            )
+                        else:
+                            current_app.logger.error("No se pudo obtener el deal_id al crear el nuevo deal.")
+                    else:
+                        current_app.logger.error("No se pudo crear la persona en Pipedrive.")
             else:
                 current_app.logger.warning("No se encontraron datos del usuario para Pipedrive.")
         except Exception as pipedrive_error:
             current_app.logger.error(f"Error en la integración con Pipedrive: {pipedrive_error}")
-            # Continuamos sin bloquear la respuesta al usuario
+            # Se continúa sin bloquear la respuesta al usuario
         
         return jsonify({'response': bot_response}), 200
     except Exception as e:
