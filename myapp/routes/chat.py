@@ -15,7 +15,7 @@ client = OpenAI(api_key=os.getenv('OPEN_API_KEY'))
 def load_context_content(context_filename):
     safe_filename = os.path.basename(context_filename)
     context_dir = os.getenv("CONTEXTS_DIR", "context")
-    context_filepath = f"/chatbotv2025/myapp/context/{safe_filename}.txt"
+    context_filepath = os.path.join(os.getenv("CONTEXTS_DIR", "context"), safe_filename + ".txt")
     if os.path.exists(context_filepath):
         with open(context_filepath, "r", encoding="utf-8") as f:
             return f.read()
@@ -103,41 +103,43 @@ def enviar_a_pipedrive(user_id):
         current_app.logger.error(f"❌ Error enviando datos a Pipedrive: {e}")
 
 @chat_bp.route('/chat', methods=['POST'])
-def chat():
+def chat(user_message=None, context_filename=None, user_id=None, session_id=None):
     try:
-        if not request.is_json:
-            return jsonify({"error": "El request debe ser JSON"}), 400
+        # ✅ Si la función es llamada desde WhatsApp, los valores llegan como parámetros
+        if user_message is None:
+            if not request.is_json:
+                return jsonify({"error": "El request debe ser JSON"}), 400
 
-        data = request.get_json() or {}
-        user_message = data.get('message', '')
-        context_filename = request.headers.get('x-contexto')
+            data = request.get_json() or {}
+            user_message = data.get('message', '')
+            context_filename = request.headers.get('x-contexto')
 
-        if not user_message:
-            return jsonify({"error": "El campo 'message' es obligatorio"}), 400
-        if not context_filename:
-            return jsonify({"error": "El encabezado 'x-contexto' es obligatorio"}), 400
+            if not user_message:
+                return jsonify({"error": "El campo 'message' es obligatorio"}), 400
+            if not context_filename:
+                return jsonify({"error": "El encabezado 'x-contexto' es obligatorio"}), 400
 
-        ensure_user_id(session)
-        user_id = session['user_id']
-        session_id = session['session_id']
+            ensure_user_id(session)
+            user_id = session['user_id']
+            session_id = session['session_id']
 
+        # ✅ Recuperar historial de conversación
         chat_history = get_chat_history(user_id, session_id)
 
-        # ✅ Extraer datos del usuario y guardarlos en MongoDB
+        # ✅ Extraer y guardar datos del usuario en MongoDB
         nuevos_datos = detectar_datos_usuario(user_message)
         if nuevos_datos:
             current_app.logger.info(f"🛠️ Datos nuevos detectados: {nuevos_datos}")
             manejar_datos_usuario(user_id, nuevos_datos, session, current_app.db.usuarios, current_app.logger)
-            
-            # ✅ Llamar a Pipedrive sin esperar un motivo de visita específico
             enviar_a_pipedrive(user_id)
 
-        # Cargar contexto
+        # ✅ Cargar contexto del chatbot
         try:
             context_content = load_context_content(context_filename)
         except FileNotFoundError as e:
             return jsonify({"error": str(e)}), 400
 
+        # ✅ Generar respuesta con OpenAI
         messages = [{"role": "system", "content": context_content}] + chat_history
         messages.append({"role": "user", "content": user_message})
 
@@ -148,6 +150,15 @@ def chat():
             temperature=0.7
         )
         bot_response = response.choices[0].message.content
+
+        # ✅ Guardar historial de conversación
+        chat_history.append({"role": "user", "content": user_message})
+        chat_history.append({"role": "assistant", "content": bot_response})
+        current_app.db.chats.update_one(
+            {"user_id": user_id, "session_id": session_id},
+            {"$set": {"history": chat_history}},
+            upsert=True
+        )
 
         return jsonify({'response': bot_response}), 200
 
