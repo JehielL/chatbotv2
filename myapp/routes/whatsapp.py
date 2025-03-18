@@ -3,8 +3,9 @@ import requests
 import os
 from openai import OpenAI
 import uuid
+from myapp.routes.chat import procesar_mensaje
 
-from myapp.routes.chat import chat  # Importamos la lógica del chatbot
+from myapp.routes.chat import chat 
 
 whatsapp_bp = Blueprint('whatsapp', __name__)
 
@@ -14,7 +15,7 @@ WHATSAPP_VERIFY_TOKEN = "futurito123"
 
 @whatsapp_bp.route('/whatsapp/webhook', methods=['POST'])
 def receive_message():
-    """Recibe mensajes de WhatsApp y los procesa con la lógica de chat.py"""
+    """Recibe mensajes de WhatsApp y los procesa con la lógica del chatbot"""
     data = request.get_json()
     print("📩 Mensaje recibido:", data)
 
@@ -23,38 +24,23 @@ def receive_message():
             for change in entry["changes"]:
                 if "messages" in change["value"]:
                     for message in change["value"]["messages"]:
-                        sender_number = message["from"]  # 📌 Asignar el número del usuario
+                        sender_number = message["from"]  
                         user_text = message["text"]["body"]
 
-                        # ✅ Usar el número de teléfono como `user_id`
                         user_id = sender_number  
-
-                        # ✅ Crear un session_id único por usuario de WhatsApp
-                        session_id = f"whatsapp_{user_id}"
+                        session_id = f"whatsapp_{user_id}_{uuid.uuid4().hex[:8]}"  # 🔥 Evita colisiones de sesión
 
                         print(f"🆔 Nuevo mensaje de {user_id} con session_id {session_id}")
 
-                        # ✅ Enviar mensaje al chatbot con el contexto
-                        context_filename = "robota-context"  # Cambia esto según el contexto
-                        with current_app.app_context():  # Asegurar el contexto de Flask
-                            response = chat(user_text, context_filename, user_id, session_id)
-                        
-                        # 🔍 Depuración
-                        print("🔍 Respuesta del chatbot:", response)
-
-                        # ✅ Extraer respuesta correctamente
-                        if isinstance(response, tuple):  # Flask Response es un tuple (json, status_code)
-                            response_data = response[0].get_json()
-                        else:
-                            response_data = response
-
+                        response_data = procesar_mensaje(user_text, "robota-context", user_id, session_id)
                         bot_response = response_data.get("response", "No se pudo procesar tu mensaje.")
 
-                        # 🚀 Enviar respuesta a WhatsApp
-                        print(f"📤 Enviando respuesta a: {sender_number} -> {bot_response}")
+                        print(f"🛠️ Mensaje procesado para {user_id}: {bot_response}")
+
                         send_whatsapp_message(sender_number, bot_response)
 
     return jsonify({"status": "received"}), 200
+
 
 def send_whatsapp_message(phone, message):
     """Envía un mensaje de WhatsApp usando la API de Meta"""
